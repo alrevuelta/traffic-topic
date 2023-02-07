@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
+	logging "github.com/ipfs/go-log/v2"
 	"github.com/waku-org/go-waku/waku/v2/node"
 	"github.com/waku-org/go-waku/waku/v2/payload"
 	"github.com/waku-org/go-waku/waku/v2/protocol"
@@ -23,6 +24,12 @@ import (
 var log = utils.Logger().Named("basic2")
 
 func main() {
+	lvl, err := logging.LevelFromString("info")
+	if err != nil {
+		panic(err)
+	}
+	logging.SetAllLoggers(lvl)
+
 	hostAddr, _ := net.ResolveTCPAddr("tcp", "0.0.0.0:0")
 	key, err := randomHex(32)
 	if err != nil {
