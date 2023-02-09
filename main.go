@@ -109,7 +109,7 @@ func readLoop(ctx context.Context, wakuNode *node.WakuNode) {
 		payload, err := payload.DecodePayload(value.Message(), &payload.KeyInfo{Kind: payload.None})
 		if err != nil {
 			fmt.Println(err)
-			return
+			continue
 		}
 		log.Info("Received msg, ", zap.String("data", string(payload.Data)))
 	}
