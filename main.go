@@ -9,14 +9,13 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/p2p/enode"
 	logging "github.com/ipfs/go-log/v2"
+	"github.com/waku-org/go-waku/waku/v2/dnsdisc"
 	"github.com/waku-org/go-waku/waku/v2/node"
 	"github.com/waku-org/go-waku/waku/v2/payload"
-	"github.com/waku-org/go-waku/waku/v2/protocol"
-	"github.com/waku-org/go-waku/waku/v2/protocol/pb"
 	"github.com/waku-org/go-waku/waku/v2/utils"
 	"go.uber.org/zap"
 )
@@ -44,11 +43,22 @@ func main() {
 
 	ctx := context.Background()
 
+	discoveryURL := "enrtree://AOGECG2SPND25EEFMAJ5WF3KSGJNSGV356DSTL2YVLLZWIV6SAYBM@test.waku.nodes.status.im"
+	nodes, err := dnsdisc.RetrieveNodes(context.Background(), discoveryURL)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println(nodes)
+
 	wakuNode, err := node.New(
 		node.WithPrivateKey(prvKey),
 		node.WithHostAddress(hostAddr),
 		node.WithNTP(),
 		node.WithWakuRelay(),
+		// TODO: add all
+		node.WithDiscoveryV5(8000, []*enode.Node{nodes[0].ENR}, true),
+		node.WithDiscoverParams(10),
 	)
 	if err != nil {
 		log.Error("Error creating wakunode", zap.Error(err))
@@ -60,7 +70,11 @@ func main() {
 		return
 	}
 
-	go writeLoop(ctx, wakuNode)
+	err = wakuNode.DiscV5().Start(ctx)
+	if err != nil {
+		log.Fatal("Error starting discovery", zap.Error(err))
+	}
+
 	go readLoop(ctx, wakuNode)
 
 	// Wait for a SIGINT or SIGTERM signal
@@ -82,56 +96,21 @@ func randomHex(n int) (string, error) {
 	return hex.EncodeToString(bytes), nil
 }
 
-func write(ctx context.Context, wakuNode *node.WakuNode, msgContent string) {
-	contentTopic := protocol.NewContentTopic("basic2", 1, "test", "proto")
-
-	var version uint32 = 0
-	var timestamp int64 = utils.GetUnixEpoch(wakuNode.Timesource())
-
-	p := new(payload.Payload)
-	p.Data = []byte(wakuNode.ID() + ": " + msgContent)
-	p.Key = &payload.KeyInfo{Kind: payload.None}
-
-	payload, err := p.Encode(version)
-	if err != nil {
-		log.Error("Error encoding the payload", zap.Error(err))
-		return
-	}
-
-	msg := &pb.WakuMessage{
-		Payload:      payload,
-		Version:      version,
-		ContentTopic: contentTopic.String(),
-		Timestamp:    timestamp,
-	}
-
-	_, err = wakuNode.Relay().Publish(ctx, msg)
-	if err != nil {
-		log.Error("Error sending a message", zap.Error(err))
-	}
-}
-
-func writeLoop(ctx context.Context, wakuNode *node.WakuNode) {
-	for {
-		time.Sleep(2 * time.Second)
-		write(ctx, wakuNode, "Hello world!")
-	}
-}
-
 func readLoop(ctx context.Context, wakuNode *node.WakuNode) {
-	sub, err := wakuNode.Relay().Subscribe(ctx)
+
+	sub, err := wakuNode.Relay().SubscribeToTopic(ctx, "/waku/2/default-waku/proto")
 	if err != nil {
 		log.Error("Could not subscribe", zap.Error(err))
 		return
 	}
 
 	for value := range sub.C {
+		log.Info("rx ", zap.String("ContentTopic", value.Message().ContentTopic))
 		payload, err := payload.DecodePayload(value.Message(), &payload.KeyInfo{Kind: payload.None})
 		if err != nil {
 			fmt.Println(err)
 			return
 		}
-
 		log.Info("Received msg, ", zap.String("data", string(payload.Data)))
 	}
 }
