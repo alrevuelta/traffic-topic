@@ -8,22 +8,72 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	logging "github.com/ipfs/go-log/v2"
+	"github.com/jackc/pgx/v4"
 	"github.com/waku-org/go-waku/waku/v2/dnsdisc"
 	"github.com/waku-org/go-waku/waku/v2/node"
-	"github.com/waku-org/go-waku/waku/v2/payload"
 	"github.com/waku-org/go-waku/waku/v2/utils"
 	"go.uber.org/zap"
 )
 
+// var TopicToBytes map[string]uint64 //use a thread safe one
+var TopicToBytes sync.Map
+
 var log = utils.Logger().Named("basic2")
 
+var Db *pgx.Conn
+
+var Table = `
+CREATE TABLE IF NOT EXISTS t_ctopic_traffic (
+	 f_timestamp TIMESTAMPTZ,
+	 f_content_topic TEXT,
+	 f_bytes_sent NUMERIC,
+	 PRIMARY KEY (f_timestamp, f_content_topic)
+);
+`
+
+var Insert = `
+INSERT INTO t_ctopic_traffic(
+	f_timestamp,
+	f_content_topic,
+	f_bytes_sent)
+VALUES ($1, $2, $3)
+`
+
 func main() {
-	lvl, err := logging.LevelFromString("info")
+
+	cfg, err := NewCliConfig()
+	if err != nil {
+		log.Fatal("error parsing config", zap.Error(err))
+	}
+
+	//postgresEndpoint := "postgres://xxx:yyy@localhost:5432"
+	Db, err := pgx.Connect(context.Background(), cfg.PostgresEndpoint)
+
+	if err != nil {
+		log.Fatal("Could not connect to postgres", zap.Error(err))
+	}
+
+	/* drop the table if needed
+	_, err = Db.Exec(context.Background(), "drop table if exists t_ctopic_traffic")
+	if err != nil {
+		log.Fatal("error cleaning table t_oracle_validator_balances at startup: ", err)
+	}*/
+
+	// Create table if it doesnt exist
+	if _, err := Db.Exec(
+		context.Background(),
+		Table); err != nil {
+		log.Fatal("error creating table t_oracle_validator_balances: ", zap.Error(err))
+	}
+
+	lvl, err := logging.LevelFromString("warn")
 	if err != nil {
 		panic(err)
 	}
@@ -76,6 +126,7 @@ func main() {
 	}
 
 	go readLoop(ctx, wakuNode)
+	go heartBeat()
 
 	// Wait for a SIGINT or SIGTERM signal
 	ch := make(chan os.Signal, 1)
@@ -96,6 +147,27 @@ func randomHex(n int) (string, error) {
 	return hex.EncodeToString(bytes), nil
 }
 
+func heartBeat() {
+
+	for range time.Tick(time.Second * 15) {
+		TopicToBytes.Range(func(k, v interface{}) bool {
+
+			_, err := Db.Exec(
+				context.Background(),
+				Insert,
+				time.Now().Unix(),
+				k,
+				v)
+			if err != nil {
+				log.Error("error inserting into table t_ctopic_traffic: ", zap.Error(err))
+			}
+
+			fmt.Println("range (): ", k, " ", v)
+			return true
+		})
+	}
+}
+
 func readLoop(ctx context.Context, wakuNode *node.WakuNode) {
 
 	sub, err := wakuNode.Relay().SubscribeToTopic(ctx, "/waku/2/default-waku/proto")
@@ -105,12 +177,27 @@ func readLoop(ctx context.Context, wakuNode *node.WakuNode) {
 	}
 
 	for value := range sub.C {
-		log.Info("rx ", zap.String("ContentTopic", value.Message().ContentTopic))
-		payload, err := payload.DecodePayload(value.Message(), &payload.KeyInfo{Kind: payload.None})
-		if err != nil {
-			fmt.Println(err)
-			continue
+		msg := value.Message()
+		//logrus.Info("Received msg", msg.ContentTopic, " ", msg.Ephemeral, " ", len(msg.Payload))
+
+		//TopicToBytes[msg.ContentTopic] += len(msg.Payload)
+
+		// If topic already exists increase, otherwise set.
+		value, ok := TopicToBytes.Load(msg.ContentTopic)
+		if ok {
+			TopicToBytes.Store(msg.ContentTopic, value.(uint64)+uint64(len(msg.Payload)))
+		} else {
+			TopicToBytes.Store(msg.ContentTopic, uint64(len(msg.Payload)))
 		}
-		log.Info("Received msg, ", zap.String("data", string(payload.Data)))
+
+		/*
+			payload, err := payload.DecodePayload(value.Message(), &payload.KeyInfo{Kind: payload.None})
+			if err != nil {
+				logrus.Info("Could not decode", " ", len(value.Message().Payload), " , ", value.Message().ContentTopic)
+				continue
+			}
+
+		*/
+
 	}
 }
