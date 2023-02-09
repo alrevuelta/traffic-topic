@@ -16,6 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	logging "github.com/ipfs/go-log/v2"
 	"github.com/jackc/pgx/v4"
+	logrus "github.com/sirupsen/logrus"
 	"github.com/waku-org/go-waku/waku/v2/dnsdisc"
 	"github.com/waku-org/go-waku/waku/v2/node"
 	"github.com/waku-org/go-waku/waku/v2/utils"
@@ -54,17 +55,19 @@ func main() {
 	}
 
 	//postgresEndpoint := "postgres://xxx:yyy@localhost:5432"
-	Db, err := pgx.Connect(context.Background(), cfg.PostgresEndpoint)
+	Db, err = pgx.Connect(context.Background(), cfg.PostgresEndpoint)
 
 	if err != nil {
 		log.Fatal("Could not connect to postgres", zap.Error(err))
 	}
 
-	/* drop the table if needed
-	_, err = Db.Exec(context.Background(), "drop table if exists t_ctopic_traffic")
-	if err != nil {
-		log.Fatal("error cleaning table t_oracle_validator_balances at startup: ", err)
-	}*/
+	if cfg.ResetTable {
+		logrus.Info("Reseting table t_ctopic_traffic")
+		_, err = Db.Exec(context.Background(), "drop table if exists t_ctopic_traffic")
+		if err != nil {
+			log.Fatal("error cleaning table t_oracle_validator_balances at startup: ", zap.Error(err))
+		}
+	}
 
 	// Create table if it doesnt exist
 	if _, err := Db.Exec(
@@ -126,7 +129,7 @@ func main() {
 	}
 
 	go readLoop(ctx, wakuNode)
-	go heartBeat()
+	go heartBeat(cfg.TickSeconds)
 
 	// Wait for a SIGINT or SIGTERM signal
 	ch := make(chan os.Signal, 1)
@@ -147,22 +150,23 @@ func randomHex(n int) (string, error) {
 	return hex.EncodeToString(bytes), nil
 }
 
-func heartBeat() {
+func heartBeat(tickSeconds int) {
 
-	for range time.Tick(time.Second * 15) {
+	for range time.Tick(time.Second * time.Duration(tickSeconds)) {
+		logrus.Info("Saving content to db")
 		TopicToBytes.Range(func(k, v interface{}) bool {
+			nowTimeStamp := time.Now()
 
 			_, err := Db.Exec(
 				context.Background(),
 				Insert,
-				time.Now().Unix(),
-				k,
-				v)
+				nowTimeStamp,
+				k.(string),
+				v.(uint64))
 			if err != nil {
 				log.Error("error inserting into table t_ctopic_traffic: ", zap.Error(err))
 			}
-
-			fmt.Println("range (): ", k, " ", v)
+			//fmt.Println("range (): ", k, " ", v)
 			return true
 		})
 	}

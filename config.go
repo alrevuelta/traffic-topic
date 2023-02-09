@@ -9,6 +9,8 @@ import (
 
 type Config struct {
 	PostgresEndpoint string
+	ResetTable       bool
+	TickSeconds      int
 }
 
 // By default the release is a custom build. CI takes care of upgrading it with
@@ -18,6 +20,8 @@ var ReleaseVersion = "custom-build"
 func NewCliConfig() (*Config, error) {
 	var version = flag.Bool("version", false, "Prints the release version and exits")
 	var postgresEndpoint = flag.String("postgres-endpoint", "", "Postgres endpoint")
+	var resetTable = flag.Bool("reset-table", false, "If true resets the table (default: false)")
+	var tickSeconds = flag.Int("tick-seconds", 1800, "Tick seconds (default: 60s)")
 
 	flag.Parse()
 
@@ -28,6 +32,8 @@ func NewCliConfig() (*Config, error) {
 
 	conf := &Config{
 		PostgresEndpoint: *postgresEndpoint,
+		ResetTable:       *resetTable,
+		TickSeconds:      *tickSeconds,
 	}
 	logConfig(conf)
 	return conf, nil
@@ -36,5 +42,7 @@ func NewCliConfig() (*Config, error) {
 func logConfig(cfg *Config) {
 	logrus.WithFields(logrus.Fields{
 		"PostgresEndpoint": cfg.PostgresEndpoint,
+		"ResetTable":       cfg.ResetTable,
+		"TickSeconds":      cfg.TickSeconds,
 	}).Info("Cli Config:")
 }
