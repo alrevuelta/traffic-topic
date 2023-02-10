@@ -55,25 +55,25 @@ func main() {
 	}
 
 	//postgresEndpoint := "postgres://xxx:yyy@localhost:5432"
-	Db, err = pgx.Connect(context.Background(), cfg.PostgresEndpoint)
+	if !cfg.DryRun {
+		Db, err = pgx.Connect(context.Background(), cfg.PostgresEndpoint)
 
-	if err != nil {
-		log.Fatal("Could not connect to postgres", zap.Error(err))
-	}
-
-	if cfg.ResetTable {
-		logrus.Info("Reseting table t_ctopic_traffic")
-		_, err = Db.Exec(context.Background(), "drop table if exists t_ctopic_traffic")
 		if err != nil {
-			log.Fatal("error cleaning table t_oracle_validator_balances at startup: ", zap.Error(err))
+			log.Fatal("Could not connect to postgres", zap.Error(err))
 		}
-	}
-
-	// Create table if it doesnt exist
-	if _, err := Db.Exec(
-		context.Background(),
-		Table); err != nil {
-		log.Fatal("error creating table t_oracle_validator_balances: ", zap.Error(err))
+		if cfg.ResetTable {
+			logrus.Info("Reseting table t_ctopic_traffic")
+			_, err = Db.Exec(context.Background(), "drop table if exists t_ctopic_traffic")
+			if err != nil {
+				log.Fatal("error cleaning table t_oracle_validator_balances at startup: ", zap.Error(err))
+			}
+		}
+		// Create table if it doesnt exist
+		if _, err := Db.Exec(
+			context.Background(),
+			Table); err != nil {
+			log.Fatal("error creating table t_oracle_validator_balances: ", zap.Error(err))
+		}
 	}
 
 	lvl, err := logging.LevelFromString("warn")
@@ -111,7 +111,7 @@ func main() {
 		node.WithWakuRelay(),
 		// TODO: add all
 		node.WithDiscoveryV5(8000, []*enode.Node{nodes[0].ENR}, true),
-		node.WithDiscoverParams(10),
+		node.WithDiscoverParams(30),
 	)
 	if err != nil {
 		log.Error("Error creating wakunode", zap.Error(err))
@@ -129,7 +129,7 @@ func main() {
 	}
 
 	go readLoop(ctx, wakuNode)
-	go heartBeat(cfg.TickSeconds)
+	go heartBeat(cfg.TickSeconds, cfg.DryRun)
 
 	// Wait for a SIGINT or SIGTERM signal
 	ch := make(chan os.Signal, 1)
@@ -150,23 +150,36 @@ func randomHex(n int) (string, error) {
 	return hex.EncodeToString(bytes), nil
 }
 
-func heartBeat(tickSeconds int) {
+func heartBeat(tickSeconds int, dryRun bool) {
 
 	for range time.Tick(time.Second * time.Duration(tickSeconds)) {
-		logrus.Info("Saving content to db")
-		TopicToBytes.Range(func(k, v interface{}) bool {
-			nowTimeStamp := time.Now()
 
-			_, err := Db.Exec(
-				context.Background(),
-				Insert,
-				nowTimeStamp,
-				k.(string),
-				v.(uint64))
-			if err != nil {
-				log.Error("error inserting into table t_ctopic_traffic: ", zap.Error(err))
+		// Save traffic to db
+		nowTimeStamp := time.Now()
+		logrus.Info("Saving content to db: ", nowTimeStamp)
+		bytesSent := uint64(0)
+		TopicToBytes.Range(func(k, v interface{}) bool {
+			if !dryRun {
+				_, err := Db.Exec(
+					context.Background(),
+					Insert,
+					nowTimeStamp,
+					k.(string),
+					v.(uint64))
+				if err != nil {
+					log.Error("error inserting into table t_ctopic_traffic: ", zap.Error(err))
+				}
 			}
+			bytesSent += v.(uint64)
 			//fmt.Println("range (): ", k, " ", v)
+			return true
+		})
+
+		logrus.Info("Total bytes sent: ", bytesSent, " in ", nowTimeStamp, " during ", tickSeconds, " seconds")
+
+		// Clean map for next iteration.
+		TopicToBytes.Range(func(key interface{}, value interface{}) bool {
+			TopicToBytes.Delete(key)
 			return true
 		})
 	}

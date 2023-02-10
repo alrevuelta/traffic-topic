@@ -11,6 +11,7 @@ type Config struct {
 	PostgresEndpoint string
 	ResetTable       bool
 	TickSeconds      int
+	DryRun           bool
 }
 
 // By default the release is a custom build. CI takes care of upgrading it with
@@ -22,6 +23,7 @@ func NewCliConfig() (*Config, error) {
 	var postgresEndpoint = flag.String("postgres-endpoint", "", "Postgres endpoint")
 	var resetTable = flag.Bool("reset-table", false, "If true resets the table (default: false)")
 	var tickSeconds = flag.Int("tick-seconds", 1800, "Tick seconds (default: 60s)")
+	var dryRun = flag.Bool("dry-run", false, "If true does not write to the database (default: false)")
 
 	flag.Parse()
 
@@ -34,6 +36,7 @@ func NewCliConfig() (*Config, error) {
 		PostgresEndpoint: *postgresEndpoint,
 		ResetTable:       *resetTable,
 		TickSeconds:      *tickSeconds,
+		DryRun:           *dryRun,
 	}
 	logConfig(conf)
 	return conf, nil
@@ -44,5 +47,6 @@ func logConfig(cfg *Config) {
 		"PostgresEndpoint": cfg.PostgresEndpoint,
 		"ResetTable":       cfg.ResetTable,
 		"TickSeconds":      cfg.TickSeconds,
+		"DryRun":           cfg.DryRun,
 	}).Info("Cli Config:")
 }
