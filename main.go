@@ -25,6 +25,7 @@ import (
 
 // var TopicToBytes map[string]uint64 //use a thread safe one
 var TopicToBytes sync.Map
+var TopicToCount sync.Map
 
 var log = utils.Logger().Named("basic2")
 
@@ -48,6 +49,10 @@ VALUES ($1, $2, $3)
 `
 
 func main() {
+	customFormatter := new(logrus.TextFormatter)
+	customFormatter.TimestampFormat = "2006-01-02 15:04:05"
+	customFormatter.FullTimestamp = true
+	logrus.SetFormatter(customFormatter)
 
 	cfg, err := NewCliConfig()
 	if err != nil {
@@ -96,7 +101,7 @@ func main() {
 
 	ctx := context.Background()
 
-	discoveryURL := "enrtree://AOGECG2SPND25EEFMAJ5WF3KSGJNSGV356DSTL2YVLLZWIV6SAYBM@test.waku.nodes.status.im"
+	discoveryURL := "enrtree://AOGECG2SPND25EEFMAJ5WF3KSGJNSGV356DSTL2YVLLZWIV6SAYBM@prod.nodes.status.im"
 	nodes, err := dnsdisc.RetrieveNodes(context.Background(), discoveryURL)
 	if err != nil {
 		panic(err)
@@ -156,10 +161,11 @@ func heartBeat(tickSeconds int, dryRun bool) {
 
 		// Save traffic to db
 		nowTimeStamp := time.Now()
-		logrus.Info("Saving content to db: ", nowTimeStamp)
+
 		bytesSent := uint64(0)
 		TopicToBytes.Range(func(k, v interface{}) bool {
 			if !dryRun {
+				logrus.Info("Saving content to db: ", nowTimeStamp)
 				_, err := Db.Exec(
 					context.Background(),
 					Insert,
@@ -174,6 +180,7 @@ func heartBeat(tickSeconds int, dryRun bool) {
 			//fmt.Println("range (): ", k, " ", v)
 			return true
 		})
+		//printSummary(TopicToBytes, TopicToCount)
 
 		logrus.Info("Total bytes sent: ", bytesSent, " in ", nowTimeStamp, " during ", tickSeconds, " seconds")
 
@@ -196,6 +203,10 @@ func readLoop(ctx context.Context, wakuNode *node.WakuNode) {
 	for value := range sub.C {
 		msg := value.Message()
 		//logrus.Info("Received msg", msg.ContentTopic, " ", msg.Ephemeral, " ", len(msg.Payload))
+		payloadSizeInBytes := len(msg.Payload)
+		if payloadSizeInBytes > 10000 {
+			logrus.Info("Big Payload", msg.ContentTopic, " ephemeral=", msg.Ephemeral, " ", len(msg.Payload), " bytes")
+		}
 
 		//TopicToBytes[msg.ContentTopic] += len(msg.Payload)
 
@@ -205,6 +216,13 @@ func readLoop(ctx context.Context, wakuNode *node.WakuNode) {
 			TopicToBytes.Store(msg.ContentTopic, value.(uint64)+uint64(len(msg.Payload)))
 		} else {
 			TopicToBytes.Store(msg.ContentTopic, uint64(len(msg.Payload)))
+		}
+
+		topicCount, ok := TopicToCount.Load(msg.ContentTopic)
+		if ok {
+			TopicToCount.Store(msg.ContentTopic, topicCount.(uint64)+uint64(1))
+		} else {
+			TopicToCount.Store(msg.ContentTopic, uint64(1))
 		}
 
 		/*
@@ -217,4 +235,18 @@ func readLoop(ctx context.Context, wakuNode *node.WakuNode) {
 		*/
 
 	}
+}
+
+func printSummary(mapTopicToBytes sync.Map, mapTopicToCount sync.Map) {
+	mapTopicToBytes.Range(func(k, v interface{}) bool {
+		logrus.Info("1range (): ", k, " ", v)
+		return true
+	})
+	mapTopicToCount.Range(func(k, v interface{}) bool {
+		logrus.Info("2range (): ", k, " ", v)
+		return true
+	})
+
+	//logrus.Info("Total bytes sent: ", bytesSent, " in ", nowTimeStamp, " during ", tickSeconds, " seconds")
+
 }
